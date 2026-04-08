@@ -1,79 +1,13 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NCKH <3 - Modern Education Platform</title>
-    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: { sans: ['Inter', 'sans-serif'] },
-            animation: {
-              'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-              'fade-in': 'fadeIn 0.5s ease-out forwards',
-              'slide-up': 'slideUp 0.6s ease-out forwards',
-            },
-            keyframes: {
-              fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
-              slideUp: { '0%': { transform: 'translateY(20px)', opacity: '0' }, '100%': { transform: 'translateY(0)', opacity: '1' } },
-            }
-          }
-        }
-      }
-    </script>
-    <style>
-      body { font-family: 'Inter', sans-serif; background-color: #f8fafc; margin: 0; }
-      #root { min-height: 100vh; display: flex; flex-col: column; }
-      .glass-card { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(226, 232, 240, 0.8); }
-      .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-      .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-      .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
-    </style>
-<script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@19.0.0",
-    "react-dom": "https://esm.sh/react-dom@19.0.0",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "react-router-dom": "https://esm.sh/react-router-dom@7.1.5",
-    "lucide-react": "https://esm.sh/lucide-react@0.475.0",
-    "zustand": "https://esm.sh/zustand@5.0.3",
-    "axios": "https://esm.sh/axios@1.7.9",
-    "react-toastify": "https://esm.sh/react-toastify@11.0.3",
-    "@nestjs/common": "https://esm.sh/@nestjs/common@^11.1.11",
-    "@nestjs/typeorm": "https://esm.sh/@nestjs/typeorm@^11.0.0",
-    "@nestjs/config": "https://esm.sh/@nestjs/config@^4.0.2",
-    "@nestjs/core": "https://esm.sh/@nestjs/core@^11.1.11",
-    "typeorm": "https://esm.sh/typeorm@^0.3.28",
-    "class-validator": "https://esm.sh/class-validator@^0.14.3",
-    "@nestjs/passport": "https://esm.sh/@nestjs/passport@^11.0.5",
-    "passport-jwt": "https://esm.sh/passport-jwt@^4.0.1",
-    "@nestjs/jwt": "https://esm.sh/@nestjs/jwt@^11.0.2",
-    "bcrypt": "https://esm.sh/bcrypt@^6.0.0",
-    "class-transformer": "https://esm.sh/class-transformer@^0.5.1",
-    "@nestjs/platform-express": "https://esm.sh/@nestjs/platform-express@^11.1.11",
-    "child_process": "https://esm.sh/child_process@^1.0.2",
-    "stripe": "https://esm.sh/stripe@^20.1.2",
-    "@nestjs/websockets": "https://esm.sh/@nestjs/websockets@^11.1.11",
-    "socket.io": "https://esm.sh/socket.io@^4.8.3",
-    "express": "https://esm.sh/express@^5.2.1",
-    "@nestjs/testing": "https://esm.sh/@nestjs/testing@^11.1.11",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
-<body class="bg-slate-50 text-slate-900 custom-scrollbar">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NCKH Learning Platform</title>
+  </head>
+  <body>
     <div id="root"></div>
-    <script type="module" src="index.tsx"></script>
-<script type="module" src="/index.tsx"></script>
-</body>
+    <script type="module" src="/index.tsx"></script>
+  </body>
 </html>
