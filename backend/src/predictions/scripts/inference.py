@@ -1,102 +1,250 @@
+"""
+Student Failure Prediction - XGBoost Inference Script
+======================================================
+Features (theo thứ tự model được train):
+  1. timeSpentMinutes       - Thời gian học (phút)
+  2. pagesVisited           - Số trang đã xem
+  3. videoWatchedPercent    - % video đã xem
+  4. clickEvents            - Tổng số click
+  5. notesTaken             - Số ghi chú đã tạo
+  6. forumPosts             - Số bài forum
+  7. quizScore              - Điểm quiz (%)
+  8. attemptsTaken          - Số lần thử quiz
+  9. assignmentScore        - Điểm assignment
+ 10. feedbackRating         - Rating phản hồi (1-5)
+ 11. daysSinceLastActivity  - Số ngày kể từ hoạt động cuối
+ 12. cumulativeQuizScore    - Tổng điểm quiz tích lũy
+ 13. attentionScore         - Điểm chú ý (0-1)
+
+Output JSON:
+  {
+    "failureRisk": float [0-1],   -- xác suất RỚT
+    "confidence": float [0-1],    -- độ tin cậy
+    "verdict": "PASS" | "FAIL",   -- kết quả phán quyết
+    "details": { ... }            -- chi tiết features
+  }
+"""
+
 import sys
 import json
 import argparse
 import numpy as np
 import os
 
-try:
-    import torch
-    import torch.nn as nn
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
-class SimpleStudentMLP(nn.Module):
-    def __init__(self, input_size=4):
-        super(SimpleStudentMLP, self).__init__()
-        if not TORCH_AVAILABLE: return
-        self.layers = nn.Sequential(
-            nn.Linear(input_size, 32),
-            nn.ReLU(),
-            nn.Linear(32, 16),
-            nn.ReLU(),
-            nn.Linear(16, 1),
-            nn.Sigmoid()
-        )
-    def forward(self, x):
-        return self.layers(x)
+def safe_avg(lst):
+    return sum(lst) / len(lst) if lst else 0.0
 
-def run_inference(model_path, logs):
+def safe_sum(lst):
+    return sum(lst)
+
+# ── Feature Extraction ───────────────────────────────────────────────────────
+
+def extract_features(logs: list) -> tuple:
+    """
+    Trích xuất 13 features từ danh sách learning logs.
+    Trả về (feature_array, feature_dict) để log chi tiết.
+    """
+    time_spent       = [l.get('timeSpentMinutes', 0) or 0 for l in logs]
+    pages_visited    = [l.get('pagesVisited', 0) or 0 for l in logs]
+    video_pct        = [l.get('videoWatchedPercent', 0) or 0 for l in logs]
+    clicks           = [l.get('clickEvents', 0) or 0 for l in logs]
+    notes            = [l.get('notesTaken', 0) or 0 for l in logs]
+    forum            = [l.get('forumPosts', 0) or 0 for l in logs]
+    quiz_scores      = [l.get('quizScore', 0) or 0 for l in logs]
+    attempts         = [l.get('attemptsTaken', 1) or 1 for l in logs]
+    assign_scores    = [l.get('assignmentScore', 0) or 0 for l in logs]
+    feedback         = [l.get('feedbackRating', 3) or 3 for l in logs]
+    days_inactive    = [l.get('daysSinceLastActivity', 0) or 0 for l in logs]
+    cumul_quiz       = [l.get('cumulativeQuizScore', 0) or 0 for l in logs]
+    attention        = [l.get('attentionScore', 0.5) or 0.5 for l in logs]
+
+    avg_time      = safe_avg(time_spent)
+    avg_pages     = safe_avg(pages_visited)
+    avg_video     = safe_avg(video_pct)
+    total_clicks  = safe_sum(clicks)
+    avg_notes     = safe_avg(notes)
+    avg_forum     = safe_avg(forum)
+    avg_quiz      = safe_avg(quiz_scores)
+    avg_attempts  = safe_avg(attempts)
+    avg_assign    = safe_avg(assign_scores)
+    avg_feedback  = safe_avg(feedback)
+    avg_inactive  = safe_avg(days_inactive)
+    avg_cumul     = safe_avg(cumul_quiz)
+    avg_attention = safe_avg(attention)
+
+    feature_vector = np.array([[
+        avg_time, avg_pages, avg_video, total_clicks,
+        avg_notes, avg_forum, avg_quiz, avg_attempts,
+        avg_assign, avg_feedback, avg_inactive,
+        avg_cumul, avg_attention
+    ]], dtype=np.float32)
+
+    feature_dict = {
+        "avgTimeSpent":          round(avg_time, 2),
+        "avgPagesVisited":       round(avg_pages, 2),
+        "avgVideoWatched":       round(avg_video, 2),
+        "totalInteractionEvents": int(total_clicks),
+        "avgNotesTaken":         round(avg_notes, 2),
+        "avgForumPosts":         round(avg_forum, 2),
+        "avgQuizScore":          round(avg_quiz, 2),
+        "avgAttempts":           round(avg_attempts, 2),
+        "avgAssignmentScore":    round(avg_assign, 2),
+        "avgFeedbackRating":     round(avg_feedback, 2),
+        "avgDaysInactive":       round(avg_inactive, 2),
+        "avgCumulativeQuiz":     round(avg_cumul, 2),
+        "avgAttentionScore":     round(avg_attention, 4),
+        "totalLogsAnalyzed":     len(logs)
+    }
+
+    return feature_vector, feature_dict
+
+# ── XGBoost Inference ─────────────────────────────────────────────────────────
+
+def run_xgb_inference(model_path: str, scaler_path: str, threshold_path: str, logs: list) -> dict:
+    """
+    Chạy inference với XGBoost model + StandardScaler + custom threshold.
+    Fallback về heuristic nếu import lỗi.
+    """
+    if not logs:
+        return {"error": "No telemetry logs provided for student"}
+
+    features, feature_dict = extract_features(logs)
+
     try:
-        if not logs:
-            return {"error": "No log data for this student"}
+        import pickle
 
-        time_spent = [l.get('timeSpentMinutes', 0) for l in logs]
-        scores = [l.get('quizScore', 0) for l in logs]
-        clicks = [l.get('clickEvents', 0) for l in logs]
-        video_pct = [l.get('videoWatchedPercent', 0) for l in logs]
-        
-        avg_time = sum(time_spent) / len(time_spent) if time_spent else 0
-        avg_score = sum(scores) / len(scores) if scores else 0
-        total_clicks = sum(clicks)
-        avg_video = sum(video_pct) / len(video_pct) if video_pct else 0
-        
-        risk = 0.5
-        confidence = 0.7
-        source = "heuristic"
+        # ── Load các artifacts ──
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model not found: {model_path}")
 
-        if TORCH_AVAILABLE and os.path.exists(model_path):
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
+
+        # Load scaler (optional)
+        scaler = None
+        if scaler_path and os.path.exists(scaler_path):
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+
+        # Load threshold (optional, default 0.5)
+        threshold = 0.5
+        if threshold_path and os.path.exists(threshold_path):
+            with open(threshold_path, 'rb') as f:
+                threshold = pickle.load(f)
+                if hasattr(threshold, '__float__'):
+                    threshold = float(threshold)
+                elif isinstance(threshold, (list, np.ndarray)):
+                    threshold = float(threshold[0])
+
+        # ── Transform features ──
+        X = features
+        if scaler is not None:
+            # Nếu scaler được train với số features khác, dùng fallback
             try:
-                checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-                input_tensor = torch.tensor([[avg_time, avg_score, total_clicks, avg_video]], dtype=torch.float32)
-                
-                if isinstance(checkpoint, dict):
-                    model = SimpleStudentMLP(input_size=4)
-                    model.load_state_dict(checkpoint, strict=False)
-                    model.eval()
-                else:
-                    model = checkpoint
-                    model.eval()
+                X = scaler.transform(features)
+            except Exception as scale_err:
+                # Scaler có thể được train với số features khác — thử dùng raw
+                X = features
 
-                with torch.no_grad():
-                    prediction = model(input_tensor)
-                    prob_success = float(prediction.item())
-                    risk = 1.0 - prob_success
-                    confidence = 0.95
-                    source = "pytorch_model"
-            except Exception as e:
-                source = f"heuristic_fallback (model_err: {str(e)})"
+        # ── Predict ──
+        # predict_proba trả về [[prob_class_0, prob_class_1]]
+        # class 1 = FAIL, class 0 = PASS (theo convention thông thường)
+        if hasattr(model, 'predict_proba'):
+            proba = model.predict_proba(X)[0]
+            if len(proba) == 2:
+                # Xác suất rớt = xác suất class 1
+                prob_fail = float(proba[1])
+            else:
+                prob_fail = float(proba[0])
+        elif hasattr(model, 'predict'):
+            # Binary output
+            pred = model.predict(X)[0]
+            prob_fail = float(pred)
+        else:
+            raise ValueError("Model không có predict_proba hoặc predict")
 
-        if source.startswith("heuristic"):
-            score_factor = (100 - avg_score) / 100
-            time_factor = 1.0 if avg_time < 5 else (0.5 if avg_time > 30 else 0.7)
-            risk = (score_factor * 0.7) + (time_factor * 0.3)
-            risk = max(0.0, min(1.0, risk))
+        failure_risk = prob_fail
+        verdict = "FAIL" if failure_risk >= threshold else "PASS"
+
+        # Confidence: khoảng cách từ threshold (càng xa, càng chắc)
+        confidence = min(1.0, abs(failure_risk - threshold) / 0.5 + 0.5)
 
         return {
-            "failureRisk": risk,
-            "confidence": confidence,
+            "failureRisk": round(failure_risk, 4),
+            "confidence":  round(confidence, 4),
+            "verdict":     verdict,
             "details": {
-                "avgScore": avg_score,
-                "avgTimeSpent": avg_time,
-                "totalClicks": total_clicks,
-                "avgVideo": avg_video,
-                "inferenceSource": source
+                **feature_dict,
+                "threshold":        round(float(threshold), 4),
+                "inferenceSource":  "xgboost_pkl",
+                "modelPath":        os.path.basename(model_path)
             }
         }
 
     except Exception as e:
-        return {"error": str(e)}
+        # ── Heuristic Fallback ────────────────────────────────────────────────
+        # Khi không load được model, dùng công thức heuristic đơn giản
+        _, feature_dict = extract_features(logs)
+
+        avg_quiz   = feature_dict.get("avgQuizScore", 50)
+        avg_time   = feature_dict.get("avgTimeSpent", 10)
+        avg_assign = feature_dict.get("avgAssignmentScore", 50)
+        avg_attn   = feature_dict.get("avgAttentionScore", 0.5)
+        avg_inact  = feature_dict.get("avgDaysInactive", 0)
+
+        # Risk tăng khi điểm thấp, ít học, hay vắng
+        score_risk   = (100 - avg_quiz) / 100.0
+        assign_risk  = (100 - avg_assign) / 100.0
+        time_risk    = 1.0 if avg_time < 5 else (0.3 if avg_time > 30 else 0.6)
+        attn_risk    = 1.0 - avg_attn
+        inact_risk   = min(1.0, avg_inact / 14.0)  # >14 ngày không học = max risk
+
+        failure_risk = (
+            score_risk  * 0.35 +
+            assign_risk * 0.25 +
+            time_risk   * 0.15 +
+            attn_risk   * 0.15 +
+            inact_risk  * 0.10
+        )
+        failure_risk = max(0.0, min(1.0, failure_risk))
+        threshold = 0.5
+        verdict = "FAIL" if failure_risk >= threshold else "PASS"
+
+        return {
+            "failureRisk": round(failure_risk, 4),
+            "confidence":  0.65,
+            "verdict":     verdict,
+            "details": {
+                **feature_dict,
+                "threshold":       threshold,
+                "inferenceSource": f"heuristic_fallback (model_err: {str(e)})",
+                "modelPath":       os.path.basename(model_path) if model_path else "none"
+            }
+        }
+
+
+# ── Entry Point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", required=True)
-    parser.add_argument("--logs", required=True)
+    parser = argparse.ArgumentParser(description="XGBoost Student Failure Predictor")
+    parser.add_argument("--model_path",     required=True,  help="Path to model .pkl file")
+    parser.add_argument("--scaler_path",    required=False, default="", help="Path to scaler .pkl")
+    parser.add_argument("--threshold_path", required=False, default="", help="Path to threshold .pkl")
+    parser.add_argument("--logs",           required=True,  help="JSON string of learning logs array")
     args = parser.parse_args()
 
     try:
-        logs_json = json.loads(args.logs)
-        output = run_inference(args.model_path, logs_json)
-        print(json.dumps(output))
+        logs_data = json.loads(args.logs)
+        result = run_xgb_inference(
+            model_path=args.model_path,
+            scaler_path=args.scaler_path,
+            threshold_path=args.threshold_path,
+            logs=logs_data
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        sys.exit(0)
     except Exception as e:
         print(json.dumps({"error": f"Script execution error: {str(e)}"}))
+        sys.exit(1)
