@@ -28,6 +28,15 @@ export class PredictionsController {
     return this.predictionsService.runInference(courseId, targetStudentId, req.user.id);
   }
 
+  @Roles(UserRole.INSTRUCTOR)
+  @Post('run-batch/:courseId')
+  async runBatch(
+    @Param('courseId') courseId: string,
+    @Req() req
+  ) {
+    return this.predictionsService.runBatchInference(courseId, req.user.id);
+  }
+
   @Roles(UserRole.INSTRUCTOR, UserRole.STUDENT)
   @Get('student/:studentId')
   async findByStudent(@Param('studentId') studentId: string, @Req() req) {

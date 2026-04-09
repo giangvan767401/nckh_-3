@@ -1,7 +1,7 @@
 
 import { Injectable, NotFoundException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -85,18 +85,33 @@ export class PredictionsService {
       this.logger.log(`No active model set for course, using default XGBoost model`);
     }
 
-    // Kiểm tra model mặc định có tồn tại không
-    if (!fs.existsSync(modelPath)) {
+    // Kiểm tra bộ 3 file cấu hình AI (Model, Scaler, Threshold) có tồn tại không
+    const missingFiles = [];
+    if (!fs.existsSync(modelPath)) missingFiles.push(`Mô hình (Model)`);
+    if (!fs.existsSync(scalerPath)) missingFiles.push(`Bộ chuẩn hóa (Scaler)`);
+    if (!fs.existsSync(thresholdPath)) missingFiles.push(`Ngưỡng (Threshold)`);
+
+    if (missingFiles.length > 0) {
+      this.logger.error(`Báo lỗi: Thiếu file cấu hình AI - ${missingFiles.join(', ')}`);
       throw new NotFoundException(
-        `Không tìm thấy model. Vui lòng upload model .pkl vào thư mục /model/ hoặc deploy qua Admin Dashboard.`
+        `Không thể phân tích! Hệ thống thiếu các file bắt buộc: ${missingFiles.join(', ')}. Vui lòng kiểm tra thư mục model.`
       );
     }
 
     // ──────────────────────────────────────────────────────────────
-    // 4. Lấy Learning Logs của sinh viên
+    // 4. Lấy Learning Logs của sinh viên từ tất cả Lesson trong Course
     // ──────────────────────────────────────────────────────────────
+    // Cập nhật: Frontend có thể gán trường moduleId là ID của Lesson hoặc ID của Course.
+    // Lấy tất cả lesson của Course này để query đầy đủ.
+    const courseWithLessons = await this.courseRepository.findOne({
+      where: { id: courseId },
+      relations: ['lessons']
+    });
+    const lessonIds = courseWithLessons?.lessons?.map(l => l.id) || [];
+    const moduleIds = [...lessonIds, courseId];
+
     const logs = await this.logRepository.find({
-      where: { studentId, moduleId: courseId },
+      where: { studentId, moduleId: In(moduleIds) },
       order: { timestamp: 'DESC' },
       take: 50  // Lấy nhiều hơn để dự đoán chính xác hơn
     });
@@ -216,6 +231,72 @@ export class PredictionsService {
         ));
       });
     });
+  }
+
+  async runBatchInference(courseId: string, instructorId: string): Promise<any[]> {
+    const course = await this.courseRepository.findOne({ 
+      where: { id: courseId },
+      relations: ['lessons']
+    });
+    if (!course) throw new NotFoundException('Không tìm thấy khóa học');
+
+    // Get all unique student IDs who have learning logs in any lesson of this course
+    const lessonIds = course.lessons?.map(l => l.id) || [];
+    const moduleIds = [...lessonIds, courseId];
+
+    this.logger.log(`runBatchInference: Querying logs for moduleIds: ${JSON.stringify(moduleIds)}`);
+
+    const logs = await this.logRepository.find({
+      where: { moduleId: In(moduleIds) },
+      select: ['studentId']
+    });
+
+    this.logger.log(`runBatchInference: Found ${logs.length} log rows for this course`);
+
+    const uniqueStudentIds = [...new Set(logs.map(log => log.studentId))];
+    this.logger.log(`runBatchInference: Found ${uniqueStudentIds.length} students for course ${courseId}`);
+
+    const results = [];
+    for (const studentId of uniqueStudentIds) {
+      let studentInfo: any = null;
+      try {
+        studentInfo = await this.userRepository.findOne({ where: { id: studentId } });
+        if (!studentInfo) {
+          this.logger.warn(`Skip: could not find user DB record for studentId: ${studentId}`);
+          continue;
+        }
+
+        // Tận dụng lại hàm logic runInference có sẵn
+        const prediction = await this.runInference(courseId, studentId, instructorId);
+        
+        results.push({
+          ...prediction,
+          studentInfo: {
+            id: studentInfo.id,
+            name: studentInfo.name,
+            email: studentInfo.email
+          }
+        });
+      } catch (err: any) {
+        this.logger.error(`Failed to predict for student ${studentId}: ${err.message}`, err.stack);
+        results.push({
+          id: `err-${studentId}`,
+          studentId,
+          verdict: 'LỖI',
+          failureRisk: -1,
+          confidence: 0,
+          details: { inferenceSource: `System Error: ${err.message}` },
+          studentInfo: {
+            id: studentInfo?.id || studentId,
+            name: studentInfo?.name || 'Unknown',
+            email: studentInfo?.email || 'N/A'
+          }
+        });
+      }
+    }
+
+    this.logger.log(`runBatchInference: Returning ${results.length} predictions`);
+    return results;
   }
 
   async findByStudent(studentId: string) {

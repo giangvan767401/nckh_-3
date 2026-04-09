@@ -28,8 +28,17 @@ Output JSON:
 import sys
 import json
 import argparse
-import numpy as np
 import os
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -74,13 +83,6 @@ def extract_features(logs: list) -> tuple:
     avg_cumul     = safe_avg(cumul_quiz)
     avg_attention = safe_avg(attention)
 
-    feature_vector = np.array([[
-        avg_time, avg_pages, avg_video, total_clicks,
-        avg_notes, avg_forum, avg_quiz, avg_attempts,
-        avg_assign, avg_feedback, avg_inactive,
-        avg_cumul, avg_attention
-    ]], dtype=np.float32)
-
     feature_dict = {
         "avgTimeSpent":          round(avg_time, 2),
         "avgPagesVisited":       round(avg_pages, 2),
@@ -98,7 +100,16 @@ def extract_features(logs: list) -> tuple:
         "totalLogsAnalyzed":     len(logs)
     }
 
-    return feature_vector, feature_dict
+    feature_array = None
+    if np is not None:
+        feature_array = np.array([[
+            avg_time, avg_pages, avg_video, total_clicks,
+            avg_notes, avg_forum, avg_quiz, avg_attempts,
+            avg_assign, avg_feedback, avg_inactive,
+            avg_cumul, avg_attention
+        ]], dtype=np.float32)
+
+    return feature_array, feature_dict
 
 # ── XGBoost Inference ─────────────────────────────────────────────────────────
 
@@ -114,6 +125,8 @@ def run_xgb_inference(model_path: str, scaler_path: str, threshold_path: str, lo
 
     try:
         import pickle
+        import time
+        start_time = time.time()
 
         # ── Load các artifacts ──
         if not os.path.exists(model_path):
@@ -122,44 +135,44 @@ def run_xgb_inference(model_path: str, scaler_path: str, threshold_path: str, lo
         with open(model_path, 'rb') as f:
             model = pickle.load(f)
 
-        # Load scaler (optional)
+        # Load scaler an toàn
         scaler = None
         if scaler_path and os.path.exists(scaler_path):
-            with open(scaler_path, 'rb') as f:
-                scaler = pickle.load(f)
+            try:
+                with open(scaler_path, 'rb') as f:
+                    scaler = pickle.load(f)
+            except Exception as e:
+                feature_dict["warning_scaler"] = f"Lỗi load scaler (có thể do phiên bản scikit-learn): {str(e)}"
 
-        # Load threshold (optional, default 0.5)
+        # Load threshold an toàn (default 0.5)
         threshold = 0.5
         if threshold_path and os.path.exists(threshold_path):
-            with open(threshold_path, 'rb') as f:
-                threshold = pickle.load(f)
-                if hasattr(threshold, '__float__'):
-                    threshold = float(threshold)
-                elif isinstance(threshold, (list, np.ndarray)):
-                    threshold = float(threshold[0])
+            try:
+                with open(threshold_path, 'rb') as f:
+                    t_val = pickle.load(f)
+                    if hasattr(t_val, '__float__'):
+                        threshold = float(t_val)
+                    elif isinstance(t_val, (list, np.ndarray)):
+                        threshold = float(t_val[0])
+            except Exception as e:
+                feature_dict["warning_threshold"] = f"Lỗi load threshold: {str(e)}"
 
         # ── Transform features ──
+        if np is None:
+            raise ImportError("Numpy is required for ML inference. Falling back to heuristic.")
+            
         X = features
         if scaler is not None:
-            # Nếu scaler được train với số features khác, dùng fallback
             try:
                 X = scaler.transform(features)
-            except Exception as scale_err:
-                # Scaler có thể được train với số features khác — thử dùng raw
+            except Exception:
                 X = features
 
         # ── Predict ──
-        # predict_proba trả về [[prob_class_0, prob_class_1]]
-        # class 1 = FAIL, class 0 = PASS (theo convention thông thường)
         if hasattr(model, 'predict_proba'):
             proba = model.predict_proba(X)[0]
-            if len(proba) == 2:
-                # Xác suất rớt = xác suất class 1
-                prob_fail = float(proba[1])
-            else:
-                prob_fail = float(proba[0])
+            prob_fail = float(proba[1] if len(proba) == 2 else proba[0])
         elif hasattr(model, 'predict'):
-            # Binary output
             pred = model.predict(X)[0]
             prob_fail = float(pred)
         else:
@@ -171,6 +184,8 @@ def run_xgb_inference(model_path: str, scaler_path: str, threshold_path: str, lo
         # Confidence: khoảng cách từ threshold (càng xa, càng chắc)
         confidence = min(1.0, abs(failure_risk - threshold) / 0.5 + 0.5)
 
+        latency_ms = int((time.time() - start_time) * 1000)
+
         return {
             "failureRisk": round(failure_risk, 4),
             "confidence":  round(confidence, 4),
@@ -179,7 +194,8 @@ def run_xgb_inference(model_path: str, scaler_path: str, threshold_path: str, lo
                 **feature_dict,
                 "threshold":        round(float(threshold), 4),
                 "inferenceSource":  "xgboost_pkl",
-                "modelPath":        os.path.basename(model_path)
+                "modelPath":        os.path.basename(model_path),
+                "latencyMs":        latency_ms
             }
         }
 
