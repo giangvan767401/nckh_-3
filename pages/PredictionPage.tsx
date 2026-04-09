@@ -19,6 +19,7 @@ import {
   Calendar,
   Zap,
   Info,
+  Users
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -52,6 +53,11 @@ interface PredictionResult {
   confidence: number;
   verdict: string;
   rawOutput: PredictionRaw;
+  studentInfo?: {
+    id: string;
+    name: string;
+    email: string;
+  };
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -90,10 +96,9 @@ const MetricCard = ({
 // ─── Component chính ──────────────────────────────────────────────────────────
 const PredictionPage = () => {
   const [isPredicting, setIsPredicting] = useState(false);
-  const [prediction, setPrediction] = useState<PredictionResult | null>(null);
+  const [predictions, setPredictions] = useState<PredictionResult[] | null>(null);
   const [courses, setCourses] = useState<any[]>([]);
   const [selectedCourse, setSelectedCourse] = useState('');
-  const [studentId, setStudentId] = useState('');
   const navigate = useNavigate();
 
   React.useEffect(() => {
@@ -111,24 +116,22 @@ const PredictionPage = () => {
   };
 
   const handlePredict = async () => {
-    if (!selectedCourse || !studentId.trim()) {
-      toast.error('Vui lòng chọn khóa học và nhập ID hoặc email sinh viên');
+    if (!selectedCourse) {
+      toast.error('Vui lòng chọn khóa học');
       return;
     }
 
     setIsPredicting(true);
-    setPrediction(null);
+    setPredictions(null);
 
     try {
-      const res = await api.post(
-        `/predictions/run/${selectedCourse}/${encodeURIComponent(studentId.trim())}`
-      );
-      setPrediction(res.data);
-      const verdict = res.data?.verdict ?? (res.data?.failureRisk >= 0.5 ? 'FAIL' : 'PASS');
-      if (verdict === 'FAIL') {
-        toast.warn('⚠️ Phân tích hoàn tất — Sinh viên có nguy cơ rớt môn!');
+      const res = await api.post(`/predictions/run-batch/${selectedCourse}`);
+      setPredictions(res.data);
+      if (res.data.length > 0) {
+        toast.success(`✅ Hoàn tất phân tích cho ${res.data.length} sinh viên!`);
       } else {
-        toast.success('✅ Phân tích hoàn tất — Sinh viên có khả năng đậu!');
+        const courseName = courses.find(c => c.id === selectedCourse)?.title || '';
+        toast.warn(`Chưa có sinh viên nào bắt đầu học hoặc có logs trong khóa "${courseName}"`);
       }
     } catch (err: any) {
       const msg = err.response?.data?.message || 'Lỗi khi chạy dự đoán';
@@ -139,12 +142,9 @@ const PredictionPage = () => {
     }
   };
 
-  // Tính verdict từ dữ liệu trả về (đảm bảo tương thích)
-  const verdict = prediction?.verdict ??
-    (prediction && prediction.failureRisk >= (prediction.rawOutput?.threshold ?? 0.5) ? 'FAIL' : 'PASS');
-
-  const isPass = verdict === 'PASS';
-  const raw = prediction?.rawOutput;
+  // Tính thống kê
+  const passCount = predictions?.filter(p => (p.verdict || (p.failureRisk >= (p.rawOutput?.threshold || 0.5) ? 'FAIL' : 'PASS')) === 'PASS').length || 0;
+  const failCount = (predictions?.length || 0) - passCount;
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-12">
@@ -190,28 +190,14 @@ const PredictionPage = () => {
                 </select>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
-                  Sinh Viên (Email hoặc UUID)
-                </label>
-                <input
-                  type="text"
-                  value={studentId}
-                  onChange={(e) => setStudentId(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handlePredict()}
-                  placeholder="vd: sinhvien@email.com"
-                  className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-300 transition"
-                />
-              </div>
-
               <button
                 onClick={handlePredict}
-                disabled={isPredicting || !selectedCourse || !studentId.trim()}
+                disabled={isPredicting || !selectedCourse}
                 className="w-full py-5 bg-indigo-600 text-white rounded-[24px] font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-40 transition-all shadow-xl shadow-indigo-100"
               >
                 {isPredicting
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Đang phân tích...</>
-                  : <><BrainCircuit className="w-4 h-4" /> Chạy Dự Đoán</>
+                  : <><BrainCircuit className="w-4 h-4" /> Chạy Dự Đoán Toàn Khóa</>
                 }
               </button>
             </div>
@@ -236,183 +222,92 @@ const PredictionPage = () => {
 
         {/* ── Kết quả ── */}
         <div className="lg:col-span-8">
-          {prediction ? (
+          {predictions ? (
             <div className="animate-in fade-in slide-in-from-bottom-6 duration-500 space-y-6">
 
-              {/* ── Verdict Banner ── */}
-              <div className={`p-10 rounded-[48px] border-2 ${
-                isPass
-                  ? 'bg-gradient-to-br from-green-50 to-emerald-50/50 border-green-200'
-                  : 'bg-gradient-to-br from-red-50 to-rose-50/50 border-red-200'
-              }`}>
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-8">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-16 h-16 rounded-3xl flex items-center justify-center shadow-lg ${
-                      isPass ? 'bg-green-500 shadow-green-200' : 'bg-red-500 shadow-red-200'
-                    }`}>
-                      {isPass
-                        ? <CheckCircle2 className="w-9 h-9 text-white" />
-                        : <XCircle className="w-9 h-9 text-white" />
-                      }
-                    </div>
-                    <div>
-                      <div className={`text-3xl font-black tracking-tight ${isPass ? 'text-green-700' : 'text-red-700'}`}>
-                        {isPass ? '✅ ĐẠT (PASS)' : '❌ RỚT (FAIL)'}
-                      </div>
-                      <p className="text-sm text-slate-500 font-medium mt-1">
-                        {isPass
-                          ? 'Sinh viên có khả năng hoàn thành khóa học thành công'
-                          : 'Sinh viên có nguy cơ cao không hoàn thành khóa học'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className={`text-5xl font-black ${isPass ? 'text-green-600' : 'text-red-600'}`}>
-                      {(prediction.failureRisk * 100).toFixed(1)}%
-                    </div>
-                    <div className="text-[10px] text-slate-400 font-black uppercase tracking-widest mt-1">
-                      Xác suất Rớt
-                    </div>
-                  </div>
+              {/* ── Summary Banner ── */}
+              <div className="p-8 rounded-[40px] border border-slate-200 bg-white shadow-sm flex flex-col md:flex-row gap-6 justify-between items-center">
+                <div className="flex items-center gap-4">
+                   <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center">
+                     <Users className="w-7 h-7 text-indigo-600" />
+                   </div>
+                   <div>
+                     <h3 className="text-xl font-black text-slate-900">Tổng quan: {predictions.length} Sinh Viên</h3>
+                     <p className="text-sm text-slate-500 font-medium">Kết quả phân tích từ dữ liệu logs khóa học</p>
+                   </div>
                 </div>
-
-                {/* Progress bar */}
-                <div className="mb-2">
-                  <div className="flex justify-between text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">
-                    <span>Đậu (0%)</span>
-                    <span>Ngưỡng: {((raw?.threshold ?? 0.5) * 100).toFixed(0)}%</span>
-                    <span>Rớt (100%)</span>
+                <div className="flex gap-4">
+                  <div className="text-center px-6 py-4 bg-green-50 rounded-3xl border border-green-100">
+                     <div className="text-2xl font-black text-green-600">{passCount}</div>
+                     <div className="text-[10px] uppercase tracking-widest font-black text-green-700 mt-1">ĐẠT (PASS)</div>
                   </div>
-                  <div className="relative h-3 bg-slate-100 rounded-full overflow-hidden">
-                    {/* Threshold line */}
-                    <div
-                      className="absolute top-0 h-full w-0.5 bg-slate-400 z-10"
-                      style={{ left: `${(raw?.threshold ?? 0.5) * 100}%` }}
-                    />
-                    {/* Risk fill */}
-                    <div
-                      className={`h-full rounded-full transition-all duration-1000 ${isPass ? 'bg-green-400' : 'bg-red-400'}`}
-                      style={{ width: `${prediction.failureRisk * 100}%` }}
-                    />
+                  <div className="text-center px-6 py-4 bg-red-50 rounded-3xl border border-red-100">
+                     <div className="text-2xl font-black text-red-600">{failCount}</div>
+                     <div className="text-[10px] uppercase tracking-widest font-black text-red-700 mt-1">NGUY CƠ (FAIL)</div>
                   </div>
-                </div>
-
-                {/* Confidence + Source */}
-                <div className="flex items-center gap-4 mt-4">
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-white/70 rounded-full border border-white">
-                    <Zap className="w-3 h-3 text-indigo-600" />
-                    <span className="text-[10px] font-black text-slate-600">
-                      Độ tin cậy: {(prediction.confidence * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-white/70 rounded-full border border-white">
-                    <Database className="w-3 h-3 text-slate-500" />
-                    <span className="text-[10px] font-bold text-slate-500">
-                      {raw?.inferenceSource || 'xgboost'}
-                    </span>
-                  </div>
-                  {raw?.totalLogsAnalyzed && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-white/70 rounded-full border border-white">
-                      <FileText className="w-3 h-3 text-slate-500" />
-                      <span className="text-[10px] font-bold text-slate-500">
-                        {raw.totalLogsAnalyzed} logs
-                      </span>
-                    </div>
-                  )}
                 </div>
               </div>
 
-              {/* ── Metrics Grid ── */}
-              {raw && (
-                <div className={`p-8 rounded-[40px] border ${isPass ? 'bg-green-50/30 border-green-100' : 'bg-red-50/30 border-red-100'}`}>
-                  <h4 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-5 flex items-center gap-2">
-                    <BarChart2 className="w-4 h-4" /> Chi Tiết Features Phân Tích
-                  </h4>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    <MetricCard
-                      icon={<Clock className="w-4 h-4" />}
-                      label="TB Thời Gian Học"
-                      value={`${raw.avgTimeSpent?.toFixed(1)} phút`}
-                      highlight={raw.avgTimeSpent > 20 ? 'good' : raw.avgTimeSpent < 5 ? 'bad' : 'neutral'}
-                    />
-                    <MetricCard
-                      icon={<BarChart2 className="w-4 h-4" />}
-                      label="TB Điểm Quiz"
-                      value={`${raw.avgQuizScore?.toFixed(1)}%`}
-                      highlight={raw.avgQuizScore >= 50 ? 'good' : 'bad'}
-                    />
-                    <MetricCard
-                      icon={<BookOpen className="w-4 h-4" />}
-                      label="TB Điểm Bài Tập"
-                      value={`${raw.avgAssignmentScore?.toFixed(1)}%`}
-                      highlight={raw.avgAssignmentScore >= 50 ? 'good' : 'bad'}
-                    />
-                    <MetricCard
-                      icon={<MousePointer className="w-4 h-4" />}
-                      label="Tổng Tương Tác"
-                      value={raw.totalInteractionEvents?.toString() ?? '0'}
-                      highlight={raw.totalInteractionEvents > 50 ? 'good' : 'neutral'}
-                    />
-                    <MetricCard
-                      icon={<Eye className="w-4 h-4" />}
-                      label="TB Video Xem"
-                      value={`${raw.avgVideoWatched?.toFixed(1)}%`}
-                      highlight={raw.avgVideoWatched >= 70 ? 'good' : raw.avgVideoWatched < 30 ? 'bad' : 'neutral'}
-                    />
-                    <MetricCard
-                      icon={<Zap className="w-4 h-4" />}
-                      label="Chú Ý TB"
-                      value={`${((raw.avgAttentionScore ?? 0) * 100).toFixed(1)}%`}
-                      highlight={raw.avgAttentionScore >= 0.6 ? 'good' : raw.avgAttentionScore < 0.4 ? 'bad' : 'neutral'}
-                    />
-                    <MetricCard
-                      icon={<FileText className="w-4 h-4" />}
-                      label="TB Ghi Chú"
-                      value={raw.avgNotesTaken?.toFixed(1) ?? '0'}
-                      highlight='neutral'
-                    />
-                    <MetricCard
-                      icon={<Star className="w-4 h-4" />}
-                      label="Điểm Quiz Tích Lũy"
-                      value={`${raw.avgCumulativeQuiz?.toFixed(1)}%`}
-                      highlight={raw.avgCumulativeQuiz >= 50 ? 'good' : 'bad'}
-                    />
-                    <MetricCard
-                      icon={<Calendar className="w-4 h-4" />}
-                      label="Ngày Vắng TB"
-                      value={`${raw.avgDaysInactive?.toFixed(0)} ngày`}
-                      highlight={raw.avgDaysInactive <= 3 ? 'good' : raw.avgDaysInactive > 7 ? 'bad' : 'neutral'}
-                    />
-                  </div>
+              {/* ── Bảng Danh Sách ── */}
+              <div className="bg-white rounded-[40px] border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                  <h3 className="font-black text-slate-900 text-xs uppercase tracking-widest flex items-center gap-2">
+                    <Database className="w-4 h-4 text-indigo-500" /> Bảng Xếp Hạng & Đánh Giá
+                  </h3>
                 </div>
-              )}
-
-              {/* ── Khuyến nghị ── */}
-              {!isPass && (
-                <div className="p-8 bg-amber-50 border border-amber-100 rounded-[32px]">
-                  <h4 className="text-xs font-black uppercase tracking-widest text-amber-700 mb-4 flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4" /> Khuyến Nghị Can Thiệp
-                  </h4>
-                  <ul className="space-y-2 text-xs text-amber-800 font-medium leading-relaxed">
-                    {(raw?.avgQuizScore ?? 0) < 50 && (
-                      <li>• <strong>Điểm quiz thấp ({raw?.avgQuizScore?.toFixed(1)}%)</strong> — Cần hỗ trợ thêm về nội dung bài học và ôn luyện.</li>
-                    )}
-                    {(raw?.avgTimeSpent ?? 0) < 10 && (
-                      <li>• <strong>Thời gian học ít ({raw?.avgTimeSpent?.toFixed(1)} phút/phiên)</strong> — Khuyến khích sinh viên tăng thời gian học.</li>
-                    )}
-                    {(raw?.avgAttentionScore ?? 1) < 0.5 && (
-                      <li>• <strong>Điểm chú ý thấp ({((raw?.avgAttentionScore ?? 0) * 100).toFixed(0)}%)</strong> — Cần kiểm tra phương pháp học.</li>
-                    )}
-                    {(raw?.avgDaysInactive ?? 0) > 7 && (
-                      <li>• <strong>Vắng học lâu ({raw?.avgDaysInactive?.toFixed(0)} ngày)</strong> — Cần liên hệ và động viên sinh viên.</li>
-                    )}
-                    {(raw?.avgAssignmentScore ?? 0) < 50 && (
-                      <li>• <strong>Điểm bài tập thấp ({raw?.avgAssignmentScore?.toFixed(1)}%)</strong> — Cần hỗ trợ thêm về bài tập về nhà.</li>
-                    )}
-                    <li>• Cân nhắc tổ chức buổi phụ đạo hoặc tư vấn 1-1 với sinh viên này.</li>
-                  </ul>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50/50 border-b border-slate-100">
+                      <tr>
+                        <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Sinh Viên</th>
+                        <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Nguy Cơ</th>
+                        <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Độ Tin Cậy</th>
+                        <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Trạng Thái</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {predictions.map((p, idx) => {
+                        const isPass = (p.verdict || (p.failureRisk >= (p.rawOutput?.threshold || 0.5) ? 'FAIL' : 'PASS')) === 'PASS';
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="px-8 py-5">
+                              <div className="font-bold text-slate-900 text-sm">{p.studentInfo?.name || 'Ẩn danh'}</div>
+                              <div className="text-[10px] text-slate-500 font-medium">{p.studentInfo?.email}</div>
+                            </td>
+                            <td className="px-8 py-5 text-center">
+                              <div className={`text-lg font-black ${isPass ? 'text-green-600' : 'text-red-600'}`}>
+                                {(p.failureRisk * 100).toFixed(1)}%
+                              </div>
+                            </td>
+                            <td className="px-8 py-5 text-center">
+                              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100/50 rounded-full text-[10px] font-black text-slate-500">
+                                <Zap className="w-3 h-3" /> {(p.confidence * 100).toFixed(0)}%
+                              </div>
+                            </td>
+                            <td className="px-8 py-5 text-right">
+                              {isError ? (
+                                <div className="flex flex-col items-end gap-1">
+                                  <span className="text-red-500 font-black text-[10px] uppercase tracking-widest">LỖI HỆ THỐNG</span>
+                                  <span className="text-[9px] text-slate-400 max-w-[120px] truncate">{p.details?.inferenceSource || 'Unknown error'}</span>
+                                </div>
+                              ) : (
+                                <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border ${
+                                  isPass 
+                                    ? 'bg-green-50 text-green-700 border-green-200' 
+                                    : 'bg-red-50 text-red-700 border-red-200'
+                                }`}>
+                                  {isPass ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                                  {isPass ? 'ĐẠT' : 'NGUY CƠ RỚT'}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              )}
+              </div>
 
             </div>
           ) : (
@@ -422,7 +317,7 @@ const PredictionPage = () => {
               <div className="text-center">
                 <p className="text-[11px] font-black uppercase tracking-[0.3em] mb-2">Chờ Kết Quả</p>
                 <p className="text-[10px] font-medium text-slate-400 max-w-xs text-center leading-relaxed">
-                  Chọn khóa học & nhập thông tin sinh viên, sau đó nhấn <strong>Chạy Dự Đoán</strong>
+                  Chọn khóa học, sau đó nhấn <strong>Chạy Dự Đoán Toàn Khóa</strong> để phân tích toàn bộ sinh viên.
                 </p>
               </div>
             </div>

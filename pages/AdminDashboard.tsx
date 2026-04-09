@@ -134,10 +134,34 @@ const AdminDashboard = () => {
   };
 
   // Tính thống kê từ logs
-  const highRiskCount = logs.filter(l => l.quizScore < 50 || l.attentionScore < 0.4).length;
-  const avgQuizScore = logs.length > 0
-    ? (logs.reduce((s, l) => s + (l.quizScore || 0), 0) / logs.length).toFixed(1)
+  // Lọc logs theo khóa học đang chọn (nếu có)
+  const filteredLogs = selectedCourse
+    ? logs.filter(l => l.moduleId === selectedCourse || courses.find(c => c.id === selectedCourse)?.lessons?.some((less: any) => less.id === l.moduleId))
+    : logs;
+
+  // Tính thống kê từ logs đã lọc
+  const highRiskCount = filteredLogs.filter(l => l.quizScore < 50 || l.attentionScore < 0.4).length;
+  const avgQuizScore = filteredLogs.length > 0
+    ? (filteredLogs.reduce((s, l) => s + (l.quizScore || 0), 0) / filteredLogs.length).toFixed(1)
     : '—';
+
+  // Nhóm theo studentId cho bảng
+  const groupedLogs = Object.values(
+    filteredLogs.reduce((acc: any, log: any) => {
+      if (!acc[log.studentId]) {
+        acc[log.studentId] = { ...log, totalTime: 0, clickEvents: 0 };
+      }
+      acc[log.studentId].totalTime += log.timeSpentMinutes || 0;
+      acc[log.studentId].clickEvents += log.clickEvents || 0;
+      if (new Date(log.timestamp) > new Date(acc[log.studentId].timestamp)) {
+         acc[log.studentId].quizScore = log.quizScore;
+         acc[log.studentId].attentionScore = log.attentionScore;
+         acc[log.studentId].videoWatchedPercent = log.videoWatchedPercent;
+         acc[log.studentId].pagesVisited = log.pagesVisited;
+      }
+      return acc;
+    }, {})
+  ) as any[];
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-12">
@@ -167,7 +191,7 @@ const AdminDashboard = () => {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
         {[
           { icon: <BookOpen className="w-5 h-5" />, value: courses.length, label: 'Khóa Học', color: 'indigo' },
-          { icon: <Users className="w-5 h-5" />, value: [...new Set(logs.map(l => l.studentId))].length, label: 'Sinh Viên', color: 'blue' },
+          { icon: <Users className="w-5 h-5" />, value: groupedLogs.length, label: 'Sinh Viên', color: 'blue' },
           { icon: <TrendingDown className="w-5 h-5" />, value: highRiskCount, label: 'Nguy Cơ Cao', color: 'red' },
           { icon: <BarChart3 className="w-5 h-5" />, value: `${avgQuizScore}%`, label: 'TB Quiz', color: 'green' },
         ].map((stat, i) => (
@@ -367,7 +391,7 @@ const AdminDashboard = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {logs.map((log, i) => {
+                  {groupedLogs.map((log, i) => {
                     // Tính nguy cơ rớt sơ bộ từ log
                     const riskScore = ((100 - (log.quizScore || 0)) * 0.6 + (1 - (log.attentionScore || 0.5)) * 100 * 0.4) / 100;
                     const isHighRisk = riskScore > 0.5;
@@ -412,7 +436,7 @@ const AdminDashboard = () => {
                       </tr>
                     );
                   })}
-                  {logs.length === 0 && (
+                  {groupedLogs.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-8 py-10 text-center text-slate-400 text-xs italic">
                         Chưa có dữ liệu học tập. Hệ thống đang chờ logs từ sinh viên.

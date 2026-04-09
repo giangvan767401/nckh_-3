@@ -9,8 +9,8 @@
 | STT | Họ và Tên | Vai trò |
 |-----|-----------|---------|
 | 1 | **Phạm Văn Giang** | Trưởng nhóm / Full-stack Developer |
-| 2 | **Từ Hữu Minh Vũ** | Frontend Developer / UI Design |
-| 3 | **Trần Hà Quang** | Backend Developer / AI/ML Integration |
+| 2 | **Từ Hữu Minh Vũ** | Frontend Developer / UI Design and AI/ML Integration |
+| 3 | **Trần Hà Quang** | Backend Developer |
 
 ---
 
